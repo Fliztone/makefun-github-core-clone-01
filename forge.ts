@@ -11,16 +11,20 @@ import { Store } from './store.ts';
 
 /** Read the whole request body (git pushes carry binary packfiles, APIs carry JSON).
  * A request that cannot carry a body skips the stream machinery entirely: the read and
- * clone workloads are thousands of bodyless GETs, and each saved turn matters. */
+ * clone workloads are thousands of bodyless GETs, and each saved turn matters. Bodies
+ * are read with plain events, the shortest path for the single-chunk case. */
 async function readBody(req: IncomingMessage): Promise<Buffer> {
   const method = req.method ?? 'GET';
   if (method === 'GET' || method === 'HEAD') return Buffer.alloc(0);
   const length = req.headers['content-length'];
   const chunked = req.headers['transfer-encoding'] !== undefined;
   if (!chunked && (length === undefined || length === '0')) return Buffer.alloc(0);
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks);
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
 }
 
 function sendJson(res: ServerResponse, status: number, value: unknown): void {

@@ -63,10 +63,19 @@ async function waitForDone(): Promise<void> {
 
 async function main(): Promise<void> {
   const { server } = createForge();
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '0.0.0.0', () => resolve());
-  });
+  // Bind an ephemeral port of our own. The kernel's ephemeral range should never hold
+  // 8080 (the env's port), but the contract says NEVER 8080: refuse it explicitly and
+  // rebind if it ever comes up.
+  for (;;) {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '0.0.0.0', () => resolve());
+    });
+    const bound = server.address();
+    if (bound === null || typeof bound === 'string') throw new Error('the forge did not bind a TCP port');
+    if (bound.port !== 8080) break;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('the forge did not bind a TCP port');
   process.stdout.write(`[forge] listening on port ${address.port}\n`);
@@ -75,7 +84,8 @@ async function main(): Promise<void> {
   process.stdout.write('[forge] registered; serving until the env says done\n');
 
   await waitForDone();
-  server.close();
+  // Graceful stop: let in-flight answers finish, then drop any idle keep-alive sockets.
+  await new Promise<void>((resolve) => server.close(() => resolve()));
   server.closeAllConnections();
   process.stdout.write('[forge] done\n');
 }
