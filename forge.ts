@@ -53,7 +53,7 @@ export async function readJson(req: IncomingMessage): Promise<Record<string, unk
   return parsed as Record<string, unknown>;
 }
 
-async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
+export async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://entry.local');
   let path: string;
   try {

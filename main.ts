@@ -1,7 +1,7 @@
 // The entry <-> env lifecycle: bind an ephemeral port, register it with the env, then poll
 // /done until the suite finishes and exit 0. The server itself lives in forge.ts.
 
-import { createApp } from './forge.ts';
+import { createRawApp } from './rawhttp.ts';
 
 const ENV_URL = (process.env.MAKEFUN_ENV_URL ?? '').replace(/\/+$/, '');
 if (ENV_URL === '') {
@@ -46,7 +46,7 @@ async function waitUntilDone(): Promise<void> {
   }
 }
 
-const server = createApp();
+const server = createRawApp();
 await new Promise<void>((resolve, reject) => {
   server.once('error', reject);
   server.listen(0, '0.0.0.0', () => resolve());
