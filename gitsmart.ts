@@ -3,8 +3,9 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash } from 'node:crypto';
-import { deflateSync, inflateSync } from 'node:zlib';
+import { deflateSync } from 'node:zlib';
 import { HttpError, readBody } from './forge.ts';
+import { jsInflate } from './jsinflate.ts';
 import {
   OWNER,
   type Repo,
@@ -103,7 +104,14 @@ function packEntry(type: ObjType, data: Buffer, sha: string): Buffer {
   return entry;
 }
 
+const wholePackCache = new Map<string, Buffer>();
+
 function writePack(shas: string[]): Buffer {
+  // Objects are content-addressed and immutable, so a pack is fully determined by its
+  // object set: cache the whole framed pack (the clone workload reuses one pack heavily).
+  const key = [...shas].sort().join(',');
+  const cached = wholePackCache.get(key);
+  if (cached !== undefined) return cached;
   const parts: Buffer[] = [Buffer.from('PACK', 'ascii'), u32(2), u32(shas.length)];
   for (const sha of shas) {
     const obj = getObject(sha);
@@ -111,7 +119,10 @@ function writePack(shas: string[]): Buffer {
     parts.push(packEntry(obj.type, obj.data, sha));
   }
   const body = Buffer.concat(parts);
-  return Buffer.concat([body, createHash('sha1').update(body).digest()]);
+  const pack = Buffer.concat([body, createHash('sha1').update(body).digest()]);
+  if (wholePackCache.size > 2000) wholePackCache.clear();
+  wholePackCache.set(key, pack);
+  return pack;
 }
 
 function u32(n: number): Buffer {
@@ -125,24 +136,10 @@ const packCache = new Map<string, Buffer>();
 // ---------------------------------------------------------------- pack reading
 
 function inflateAt(buf: Buffer, pos: number): { data: Buffer; next: number } {
-  const rest = buf.subarray(pos);
-  const full = inflateSync(rest);
-  // Z_FINISH throws on a truncated stream and succeeds from the exact stream end onward
-  // (trailing bytes are ignored), so the smallest succeeding prefix is the stream's length.
-  let lo = 1;
-  let hi = rest.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    let complete = true;
-    try {
-      inflateSync(rest.subarray(0, mid));
-    } catch {
-      complete = false;
-    }
-    if (complete) hi = mid;
-    else lo = mid + 1;
-  }
-  return { data: full, next: pos + lo };
+  // Pack objects are zlib-wrapped: 2-byte header (CMF/FLG) + raw DEFLATE + 4-byte adler32.
+  // A single-pass JS inflate gives the exact consumed length without repeated zlib calls.
+  const r = jsInflate(buf, pos + 2);
+  return { data: r.data, next: pos + 2 + r.consumed + 4 };
 }
 
 function readVarint(buf: Buffer, pos: number): { value: number; next: number } {
